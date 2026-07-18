@@ -78,7 +78,7 @@ def import_upmu():
     from upmu.engine import PmuEngine  # noqa: E402
     from upmu.receiver import SerialReceiver  # noqa: E402
     from upmu.simulator import Simulator  # noqa: E402
-    from upmu import sources, config as upmu_config  # noqa: E402
+    from upmu import sources, config as upmu_config, burstfft  # noqa: E402
     return {
         "HostConfig": HostConfig,
         "ReferencePhasor": ReferencePhasor,
@@ -87,4 +87,5 @@ def import_upmu():
         "Simulator": Simulator,
         "sources": sources,
         "config": upmu_config,
+        "burstfft": burstfft,
     }

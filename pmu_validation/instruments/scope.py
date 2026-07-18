@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from .._vendor import import_scope
 from ..virtualbench import DEFAULT_BENCH, VirtualBench
+from ..harmonics import analyze as analyze_harmonics
 
 
 class Mso8104Scope:
@@ -59,6 +60,18 @@ class Mso8104Scope:
         avg = lambda xs: sum(xs) / len(xs)
         return {"vrms": avg(vr), "freq": avg(fr), "vpp": avg(vp)}
 
+    def read_spectrum(self, f0: float, n_harmonics: int = 13, cycles: int = 8):
+        """Capture a waveform spanning ~``cycles`` of ``f0`` and return a
+        :class:`~pmu_validation.harmonics.HarmonicResult`."""
+        # Slow the timebase so the record holds enough cycles for resolution.
+        self._scope.set_timebase(scale=(cycles / f0) / 10.0)
+        self._scope.single()
+        t, v = self._scope.capture_waveform(channel=self.channel)
+        if t.size < 2:
+            return None
+        fs = 1.0 / float(t[1] - t[0])
+        return analyze_harmonics(v, fs, f0, n_harmonics)
+
 
 class SimScope:
     """Simulated scope: reads the shared bench."""
@@ -90,6 +103,14 @@ class SimScope:
         avg = lambda xs: sum(xs) / len(xs)
         vrms = avg(vr)
         return {"vrms": vrms, "freq": avg(fr), "vpp": vrms * 2.0 * math.sqrt(2.0)}
+
+    def read_spectrum(self, f0: float, n_harmonics: int = 13, cycles: int = 8):
+        """Synthesize the bench waveform (fundamental + harmonics + scope gain
+        error/noise) and analyze it exactly like the real scope path."""
+        fs = 20000.0
+        seconds = max(cycles / f0, 0.4)
+        t, v = self.bench.waveform(fs, seconds)
+        return analyze_harmonics(v, fs, f0, n_harmonics)
 
 
 def make_scope(simulate: bool, *, ip: str | None = None, channel: int = 1,

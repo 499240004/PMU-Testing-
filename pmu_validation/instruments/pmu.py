@@ -25,6 +25,7 @@ import time
 
 from .._vendor import import_upmu
 from ..virtualbench import DEFAULT_BENCH, VirtualBench
+from ..harmonics import analyze as analyze_harmonics
 
 
 class _PmuBase:
@@ -120,6 +121,22 @@ class _PmuBase:
             "n": n,
         }
 
+    def read_spectrum(self, f0: float, n_harmonics: int = 13,
+                      seconds: float = 1.0, settle_s: float = 0.0):
+        """Analyze the PMU's own continuous ADC stream for harmonics.
+
+        The continuous stream (~15.36 kS/s, Nyquist ~7.7 kHz) carries the
+        injected harmonics; ``continuous_samples`` returns the recent window and
+        the same FFT the host uses turns it into per-harmonic Vrms + THD.
+        """
+        if settle_s:
+            time.sleep(settle_s)
+        rec = self.engine.continuous_samples(seconds) if self.engine else None
+        if rec is None:
+            return None
+        fs, volts = rec
+        return analyze_harmonics(volts, fs, f0, n_harmonics)
+
 
 class SerialPmu(_PmuBase):
     """Real micro-PMU on a USB-CDC serial port (or auto-detected by VID:PID)."""
@@ -175,6 +192,7 @@ class SimPmu(_PmuBase):
         source = self._u["Simulator"](
             freq=freq_hz, vrms=vrms, phase_deg=phase_deg,
             volts_per_count=sim_vpc, realtime=True,
+            harmonics=dict(self.bench.harmonics) if self.bench.harmonics else None,
         )
         self._start_pipeline(source)
 

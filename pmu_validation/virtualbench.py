@@ -20,16 +20,23 @@ verifies the calibration logic rather than trivially returning 1.0.
 """
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
+
+import numpy as np
 
 
 @dataclass
 class VirtualBench:
     # Current commanded signal at the injection node (set by the source adapter).
     freq_hz: float = 60.0
-    vrms: float = 120.0
+    vrms: float = 120.0          # fundamental Vrms
     phase_deg: float = 0.0
+    shape: str = "Sine"
+    # Harmonic content: order -> amplitude fraction of the fundamental. Set by
+    # the source adapter for a harmonic-rich stimulus (shape or custom mix).
+    harmonics: dict = field(default_factory=dict)
 
     # Independent per-instrument systematic errors + noise (fractional / absolute).
     dmm_gain_err: float = 0.0005      # +0.05% reference DMM scale error
@@ -48,13 +55,34 @@ class VirtualBench:
         self.vrms = float(vrms)
         self.phase_deg = float(phase_deg)
 
+    def _total_rms(self, vrms: float) -> float:
+        """Total RMS including harmonic content (fundamental Vrms -> total)."""
+        extra = sum(f * f for f in self.harmonics.values())
+        return vrms * math.sqrt(1.0 + extra)
+
+    def waveform(self, fs: float, seconds: float, gain_err: float | None = None):
+        """Synthesize (t, volts) of the fundamental + harmonics for the scope
+        sim. Amplitudes are fractions of the fundamental peak; a small amount of
+        noise is added so the spectrum has a realistic floor."""
+        g = self.scope_gain_err if gain_err is None else gain_err
+        apk = self.vrms * math.sqrt(2.0) * (1.0 + g)
+        n = max(16, int(fs * seconds))
+        t = np.arange(n) / fs
+        w0 = 2.0 * math.pi * self.freq_hz
+        v = apk * np.cos(w0 * t + math.radians(self.phase_deg))
+        for order, frac in self.harmonics.items():
+            v = v + apk * frac * np.cos(order * w0 * t)
+        rng = np.random.default_rng(2718)
+        v = v + rng.normal(0.0, apk * self.scope_noise_frac * 0.3, size=n)
+        return t, v
+
     # -- reads for the reference instruments --------------------------------- #
     def dmm_vrms(self) -> float:
-        v = self.vrms * (1.0 + self.dmm_gain_err)
+        v = self._total_rms(self.vrms) * (1.0 + self.dmm_gain_err)
         return v * (1.0 + self._rng.gauss(0.0, self.dmm_noise_frac))
 
     def scope_vrms(self) -> float:
-        v = self.vrms * (1.0 + self.scope_gain_err)
+        v = self._total_rms(self.vrms) * (1.0 + self.scope_gain_err)
         return v * (1.0 + self._rng.gauss(0.0, self.scope_noise_frac))
 
     def scope_freq(self) -> float:

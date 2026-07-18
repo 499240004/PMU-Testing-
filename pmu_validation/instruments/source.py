@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from .._vendor import import_hp3325
 from ..virtualbench import DEFAULT_BENCH, VirtualBench
+from ..harmonics import theoretical_fractions
 
 
 class Hp3325Source:
@@ -63,6 +64,13 @@ class Hp3325Source:
         self._dev.set_amplitude(vrms, "Vrms")
         self._dev.set_phase(phase_deg)
 
+    def set_stimulus(self, freq_hz: float, vrms: float, shape: str,
+                     harmonics: dict | None = None) -> None:
+        """Command a (possibly non-sine) stimulus. On real hardware the harmonic
+        content follows the selected waveform shape; an arbitrary ``harmonics``
+        mix is not achievable with one 3325B, so it is ignored here."""
+        self.set_signal(freq_hz, vrms, 0.0, function=shape)
+
 
 class SimSource:
     """Simulated source: writes the commanded signal into the shared bench."""
@@ -88,6 +96,18 @@ class SimSource:
     def set_signal(self, freq_hz: float, vrms: float, phase_deg: float = 0.0,
                    function: str = "Sine") -> None:
         self.bench.set_signal(freq_hz, vrms, phase_deg)
+        self.bench.shape = function
+        self.bench.harmonics = theoretical_fractions(function)
+
+    def set_stimulus(self, freq_hz: float, vrms: float, shape: str,
+                     harmonics: dict | None = None) -> None:
+        """Command a stimulus with harmonics. ``harmonics`` (order->fraction)
+        overrides the shape's theoretical content — the simulator can inject an
+        arbitrary mix even though real hardware can't."""
+        self.bench.set_signal(freq_hz, vrms, 0.0)
+        self.bench.shape = shape
+        self.bench.harmonics = (dict(harmonics) if harmonics is not None
+                                else theoretical_fractions(shape))
 
 
 def make_source(simulate: bool, *, port: str | None = None, baud: int = 4800,

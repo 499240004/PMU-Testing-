@@ -32,6 +32,7 @@ from . import plan as plans
 from .results import build_row, write_csv, summarize, plot as save_plot
 from .sequencer import run_sweep
 from .setup_guide import SetupGuideFrame
+from .harmonics_tab import HarmonicsFrame
 
 # Which derived columns to plot per plan (label, row-key, axis).
 _PLOT_SERIES = {
@@ -108,6 +109,7 @@ class ValidationGui:
 
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=6, pady=(0, 2))
+        self._nb = nb
 
         setup_tab = SetupGuideFrame(nb, self)
         nb.add(setup_tab, text="  1 · Setup Guide  ")
@@ -120,6 +122,10 @@ class ValidationGui:
         self._build_table(body)
         self._build_plot(body)
         self._build_summary(run_tab)
+
+        harm_tab = HarmonicsFrame(nb, self)
+        nb.add(harm_tab, text="  3 · Harmonics  ")
+        self._harm_tab = harm_tab
 
         self._build_statusbar()
 
@@ -552,6 +558,11 @@ def main(argv=None) -> int:
     if "--demo-setup" in argv:             # run the four connection tests (sim)
         for i, key in enumerate(("source", "dmm", "scope", "pmu")):
             root.after(500 + i * 150, lambda k=key: app.start_instrument_test(k))
+    if "--demo-harm" in argv:              # analyze a square-wave stimulus (sim)
+        app.simulate.set(True)
+        app._nb.select(2)
+        app._harm_tab.shape.set("Square")
+        root.after(700, app._harm_tab._on_run)
     root.mainloop()
     return 0
 

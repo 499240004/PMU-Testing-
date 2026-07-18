@@ -58,14 +58,32 @@ wired: `serial` (3325B, DMM, PMU CDC), `visa` (scope), `plot` (result PNGs).
 
 ## Desktop GUI
 
-A Tkinter control panel wraps the same engine — Simulate toggle, per-instrument
-connection fields, plan picker, a live results table, an embedded error/TVE
-plot, and a summary with a one-click **"Use this volts/count"** to load the
-recommended calibration back in for a verification re-run.
+A Tkinter control panel wraps the same engine, with three tabs sharing one
+Instruments bar:
+
+1. **Setup Guide** — a wiring diagram (signal path + control cables) and a
+   numbered A/B/C hookup checklist, with a per-instrument **Test → *IDN?**
+   button to confirm each link.
+2. **Run Validation** — the amplitude/frequency plans, a live results table, an
+   embedded error/TVE plot, and a summary with a one-click **"Use this
+   volts/count"** to load the recommended calibration back in for a re-run.
+3. **Harmonics** — drive a waveform shape (or a custom mix in Simulate) and
+   compare per-harmonic content **theoretical vs scope vs PMU** as a grouped bar
+   chart + table, with the three THD figures.
 
 ```powershell
 pmu-validate-gui            # or: python -m pmu_validation.gui
 ```
+
+### Harmonics
+
+A single 3325B can't synthesize an arbitrary harmonic mix, but its non-sine
+**shapes are exact Fourier series** and double as a reference: square → odd
+harmonics at 1/n (THD ~48%), triangle → odd at 1/n² (~12%), ramp → all at 1/n
+(~80%). The Harmonics tab drives the shape, then analyzes the **scope** waveform
+and the **PMU's own continuous stream** with the same FFT the PMU host uses
+(`upmu.burstfft`), reporting per-order amplitude and THD against the theoretical
+values. In Simulate mode you can also inject an arbitrary `order:fraction` mix.
 
 ## Quick start — no hardware (CLI)
 
@@ -132,6 +150,8 @@ v1 (this) covers steady-state **magnitude + frequency**. Next:
   scope channel, giving an independent phase-vs-UTC reference.
 - **ROCOF** via 3325B linear frequency sweeps at a known ramp rate.
 - **Dynamic (modulation) tests** via the 3325B AM/PM modes.
-- **THD / harmonics** against the scope, using the PMU's burst-FFT path.
 - Pass/fail limits from IEEE C37.118 as a conformance report.
+
+Done: steady-state magnitude + frequency (Run Validation tab) and **harmonics /
+THD** (Harmonics tab).
 ```

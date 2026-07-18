@@ -31,6 +31,7 @@ from matplotlib.figure import Figure
 from . import plan as plans
 from .results import build_row, write_csv, summarize, plot as save_plot
 from .sequencer import run_sweep
+from .setup_guide import SetupGuideFrame
 
 # Which derived columns to plot per plan (label, row-key, axis).
 _PLOT_SERIES = {
@@ -71,6 +72,7 @@ class ValidationGui:
         self._rows: list[dict] = []
         self._kind = "amplitude"
         self._current_vpc = 0.0
+        self._test_status: dict = {}      # instrument key -> status Label (setup tab)
 
         self._build_vars()
         self._build_layout()
@@ -101,13 +103,24 @@ class ValidationGui:
 
     # ---------------------------------------------------------------- layout
     def _build_layout(self):
-        self._build_connection_bar()
-        self._build_test_bar()
-        body = ttk.Panedwindow(self.root, orient="horizontal")
+        # Connection settings are shared across both tabs -> keep them on top.
+        self._build_connection_bar(self.root)
+
+        nb = ttk.Notebook(self.root)
+        nb.pack(fill="both", expand=True, padx=6, pady=(0, 2))
+
+        setup_tab = SetupGuideFrame(nb, self)
+        nb.add(setup_tab, text="  1 · Setup Guide  ")
+
+        run_tab = ttk.Frame(nb)
+        nb.add(run_tab, text="  2 · Run Validation  ")
+        self._build_test_bar(run_tab)
+        body = ttk.Panedwindow(run_tab, orient="horizontal")
         body.pack(fill="both", expand=True, padx=8, pady=(0, 4))
         self._build_table(body)
         self._build_plot(body)
-        self._build_summary()
+        self._build_summary(run_tab)
+
         self._build_statusbar()
 
     def _labeled(self, parent, text, var, width, col, row=0, values=None):
@@ -120,8 +133,8 @@ class ValidationGui:
         w.grid(row=row, column=col + 1, sticky="w", pady=2)
         return w
 
-    def _build_connection_bar(self):
-        f = ttk.LabelFrame(self.root, text="Instruments")
+    def _build_connection_bar(self, parent):
+        f = ttk.LabelFrame(parent, text="Instruments")
         f.pack(fill="x", padx=8, pady=6)
         ttk.Checkbutton(f, text="Simulate (no hardware)", variable=self.simulate,
                         command=self._on_mode_change).grid(row=0, column=0, columnspan=2,
@@ -139,9 +152,9 @@ class ValidationGui:
             row=1, column=6, columnspan=2, sticky="w", padx=8)
         self._hw.append(self._labeled(f, "PMU port", self.pmu_port, 8, 8, row=1))
 
-    def _build_test_bar(self):
-        f = ttk.LabelFrame(self.root, text="Test plan")
-        f.pack(fill="x", padx=8, pady=(0, 6))
+    def _build_test_bar(self, parent):
+        f = ttk.LabelFrame(parent, text="Test plan")
+        f.pack(fill="x", padx=8, pady=(6, 6))
         ttk.Radiobutton(f, text="Amplitude (calibrate volts/count)",
                         variable=self.plan_name, value="amplitude",
                         command=self._on_plan_change).grid(row=0, column=0, sticky="w", padx=8)
@@ -192,8 +205,8 @@ class ValidationGui:
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         parent.add(frame, weight=2)
 
-    def _build_summary(self):
-        f = ttk.LabelFrame(self.root, text="Summary")
+    def _build_summary(self, parent):
+        f = ttk.LabelFrame(parent, text="Summary")
         f.pack(fill="x", padx=8, pady=(0, 4))
         self.summary = tk.Text(f, height=6, wrap="word", state="disabled",
                                font=("Consolas", 9))
@@ -337,6 +350,47 @@ class ValidationGui:
                 except Exception:                         # noqa: BLE001
                     pass
 
+    # --------------------------------------------------- setup-tab hooks
+    def register_test_label(self, key: str, label):
+        """The setup guide registers its per-instrument status Label here."""
+        self._test_status[key] = label
+
+    def start_instrument_test(self, key: str):
+        """Open one instrument with the current settings and read its identity."""
+        lbl = self._test_status.get(key)
+        if lbl is not None:
+            lbl.configure(text="testing…", foreground="#666")
+        threading.Thread(target=self._test_worker, args=(key,), daemon=True).start()
+
+    def _test_worker(self, key: str):
+        from .instruments import make_source, make_dmm, make_scope, make_pmu
+        from .virtualbench import VirtualBench
+        sim = self.simulate.get()
+        bench = VirtualBench() if sim else None
+        try:
+            if key == "source":
+                inst = make_source(sim, port=self.source_port.get(),
+                                   baud=int(self.source_baud.get()), bench=bench)
+            elif key == "dmm":
+                inst = make_dmm(sim, port=self.dmm_port.get(),
+                                baud=int(self.dmm_baud.get()),
+                                parity=self.dmm_parity.get(), bench=bench)
+            elif key == "scope":
+                inst = make_scope(sim, ip=self.scope_ip.get(),
+                                  channel=int(self.scope_ch.get()), bench=bench)
+            elif key == "pmu":
+                inst = make_pmu(sim, port=self.pmu_port.get(), bench=bench)
+            else:
+                return
+            inst.open()
+            try:
+                idn = inst.identify()
+            finally:
+                inst.close()
+            self._q.put(("test", key, True, idn))
+        except Exception as exc:                              # noqa: BLE001
+            self._q.put(("test", key, False, f"{type(exc).__name__}: {exc}"))
+
     # ------------------------------------------------------------ queue pump
     def _drain_queue(self):
         try:
@@ -349,7 +403,14 @@ class ValidationGui:
 
     def _handle(self, msg):
         kind = msg[0]
-        if kind == "vpc":
+        if kind == "test":
+            _, key, ok, text = msg
+            lbl = self._test_status.get(key)
+            if lbl is not None:
+                short = text if len(text) <= 48 else text[:45] + "…"
+                lbl.configure(text=("✓ " if ok else "✗ ") + short,
+                              foreground="#0a6" if ok else "#b00020")
+        elif kind == "vpc":
             self._current_vpc = msg[1]
         elif kind == "point":
             _, i, total, res = msg
@@ -488,6 +549,9 @@ def main(argv=None) -> int:
         app.points_text.set("1,3,5,8")
         app.settle.set("1.2")
         root.after(700, app._on_run)
+    if "--demo-setup" in argv:             # run the four connection tests (sim)
+        for i, key in enumerate(("source", "dmm", "scope", "pmu")):
+            root.after(500 + i * 150, lambda k=key: app.start_instrument_test(k))
     root.mainloop()
     return 0
 

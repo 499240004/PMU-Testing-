@@ -1,0 +1,26 @@
+# --- Downloaded source zips (the apps live as submodules under apps/) --------
+*.zip
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# --- Validation run outputs --------------------------------------------------
+results/
+*.log
+
+# --- Editor / OS -------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Stray session transcript left in the working tree
+2026-*-this-session-is-being-continued-*.txt

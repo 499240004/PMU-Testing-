@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pmu-validation"
+version = "0.1.0"
+description = "Automated validation bench for the Elastic Energy micro-PMU, driving an HP 3325B source and cross-checking against an HP 34401A DMM and an MSO8104A scope."
+readme = "README.md"
+requires-python = ">=3.10"
+# Core deps. The individual instrument apps (HP3325B, HP34401A, MSO8104A, upmu)
+# are consumed as git submodules under apps/ via pmu_validation._vendor, so they
+# are NOT listed here -- their own extra deps (pyserial, pyvisa, ...) are only
+# needed when you actually talk to that instrument.
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Real hardware transports (install what you have wired up).
+serial = ["pyserial>=3.5"]      # HP 3325B + HP 34401A (RS-232) and the PMU CDC port
+visa = ["pyvisa>=1.13", "pyvisa-py>=0.7"]  # MSO8104A scope over Ethernet/VXI-11
+plot = ["matplotlib>=3.7"]      # result plots
+dev = ["pytest>=7"]
+
+[project.scripts]
+pmu-validate = "pmu_validation.cli:main"
+
+[tool.setuptools]
+packages = ["pmu_validation", "pmu_validation.instruments"]

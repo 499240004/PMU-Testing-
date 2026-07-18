@@ -1,0 +1,12 @@
+[submodule "apps/power-brick"]
+	path = apps/power-brick
+	url = https://github.com/499240004/Power-Brick-Testing.git
+[submodule "apps/hp3325"]
+	path = apps/hp3325
+	url = https://github.com/499240004/HP-3325-Function-Generator-App.git
+[submodule "apps/hp34401"]
+	path = apps/hp34401
+	url = https://github.com/499240004/HP-34401-Stream.git
+[submodule "apps/scope"]
+	path = apps/scope
+	url = https://github.com/499240004/VISA-SCOPE-communication.git

@@ -56,7 +56,18 @@ pip install -e ".[serial,visa,plot]"   # + real-hardware transports and plots
 The instrument transports are optional extras — install only what you have
 wired: `serial` (3325B, DMM, PMU CDC), `visa` (scope), `plot` (result PNGs).
 
-## Quick start — no hardware
+## Desktop GUI
+
+A Tkinter control panel wraps the same engine — Simulate toggle, per-instrument
+connection fields, plan picker, a live results table, an embedded error/TVE
+plot, and a summary with a one-click **"Use this volts/count"** to load the
+recommended calibration back in for a verification re-run.
+
+```powershell
+pmu-validate-gui            # or: python -m pmu_validation.gui
+```
+
+## Quick start — no hardware (CLI)
 
 ```powershell
 pmu-validate --simulate amplitude     # front-end scale (volts_per_count) sweep

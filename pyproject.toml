@@ -25,6 +25,7 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 pmu-validate = "pmu_validation.cli:main"
+pmu-validate-gui = "pmu_validation.gui:main"
 
 [tool.setuptools]
 packages = ["pmu_validation", "pmu_validation.instruments"]

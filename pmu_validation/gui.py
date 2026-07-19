@@ -48,6 +48,17 @@ _PLOT_SERIES = {
     },
 }
 
+class _NullScope:
+    """Stand-in when the scope is omitted, so read calls are harmless no-ops."""
+    def read(self, navg=1):
+        return {}
+
+    def read_spectrum(self, *a, **k):
+        return None
+
+
+_NULL_SCOPE = _NullScope()
+
 TABLE_COLS = [
     ("label", "Point", 90),
     ("dmm", "DMM Vrms", 90),
@@ -74,6 +85,9 @@ class ValidationGui:
         self._kind = "amplitude"
         self._current_vpc = 0.0
         self._test_status: dict = {}      # instrument key -> status Label (setup tab)
+        self._session_worker: threading.Thread | None = None
+        self._cmd_q: queue.Queue | None = None   # GUI -> session worker commands
+        self._manual_n = 0
 
         self._build_vars()
         self._build_layout()
@@ -100,6 +114,7 @@ class ValidationGui:
         self.amp_freq = tk.StringVar(value="60")
         self.settle = tk.StringVar(value="2.5")
         self.vpc = tk.StringVar(value="")
+        self.sim_line_vrms = tk.StringVar(value="120")   # emulated Variac (sim)
         self.status = tk.StringVar(value="ready")
 
     # ---------------------------------------------------------------- layout
@@ -117,6 +132,7 @@ class ValidationGui:
         run_tab = ttk.Frame(nb)
         nb.add(run_tab, text="  2 · Run Validation  ")
         self._build_test_bar(run_tab)
+        self._build_manual_bar(run_tab)
         body = ttk.Panedwindow(run_tab, orient="horizontal")
         body.pack(fill="both", expand=True, padx=8, pady=(0, 4))
         self._build_table(body)
@@ -185,6 +201,26 @@ class ValidationGui:
         self.stop_btn = ttk.Button(f, text="■ Stop", command=self._on_stop,
                                    state="disabled")
         self.stop_btn.grid(row=0, column=6, padx=2)
+
+    def _build_manual_bar(self, parent):
+        f = ttk.LabelFrame(parent, text="Variac manual capture (regime A — dial the "
+                                        "Variac by hand, DMM is the reference)")
+        f.pack(fill="x", padx=8, pady=(0, 6))
+        self.start_btn = ttk.Button(f, text="Start session", command=self._on_start_session)
+        self.start_btn.grid(row=0, column=0, padx=(8, 4), pady=4)
+        self.capture_btn = ttk.Button(f, text="◉ Capture point",
+                                      command=self._on_capture, state="disabled")
+        self.capture_btn.grid(row=0, column=1, padx=4)
+        self.end_btn = ttk.Button(f, text="End session", command=self._on_end_session,
+                                  state="disabled")
+        self.end_btn.grid(row=0, column=2, padx=4)
+        self._sim_vrms_lbl = ttk.Label(f, text="Sim line Vrms:")
+        self._sim_vrms_lbl.grid(row=0, column=3, sticky="e", padx=(16, 2))
+        self._sim_vrms_entry = ttk.Entry(f, textvariable=self.sim_line_vrms, width=8)
+        self._sim_vrms_entry.grid(row=0, column=4, sticky="w")
+        ttk.Label(f, text="(emulates turning the Variac; real hardware ignores it)",
+                  foreground="#777", font=("Segoe UI", 8)).grid(
+            row=0, column=5, sticky="w", padx=6)
 
     def _build_table(self, parent):
         frame = ttk.Frame(parent)
@@ -292,6 +328,7 @@ class ValidationGui:
         self._stop.clear()
         self.run_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
+        self.start_btn.configure(state="disabled")   # no manual session during a sweep
         self.status.set(f"running {self._kind} sweep, {len(points)} points...")
 
         settings = {
@@ -312,6 +349,109 @@ class ValidationGui:
         self._stop.set()
         self.status.set("stopping after current point...")
         self.stop_btn.configure(state="disabled")
+
+    # ------------------------------------------------ Variac manual session
+    def _on_start_session(self):
+        if self._session_worker and self._session_worker.is_alive():
+            return
+        self._kind = "amplitude"
+        self._rows = []
+        self._manual_n = 0
+        self.tree.delete(*self.tree.get_children())
+        self._reset_plot()
+        self._set_summary("")
+        self.reco.configure(text="")
+        self.apply_btn.configure(state="disabled")
+        self._reco_value = None
+        self._cmd_q = queue.Queue()
+        settings = {
+            "simulate": self.simulate.get(),
+            "dmm_port": self.dmm_port.get(), "dmm_baud": int(self.dmm_baud.get()),
+            "dmm_parity": self.dmm_parity.get(),
+            "scope_ip": self.scope_ip.get(), "scope_ch": int(self.scope_ch.get()),
+            "use_scope": self.use_scope.get(), "pmu_port": self.pmu_port.get(),
+            "vpc": float(self.vpc.get()) if self.vpc.get().strip() else None,
+        }
+        self._session_worker = threading.Thread(
+            target=self._session_run, args=(settings,), daemon=True)
+        self._session_worker.start()
+        self.start_btn.configure(state="disabled")
+        self.run_btn.configure(state="disabled")
+        self.capture_btn.configure(state="normal")
+        self.end_btn.configure(state="normal")
+        self.status.set("session open — dial the Variac, then Capture point")
+
+    def _on_capture(self):
+        if self._cmd_q is None:
+            return
+        try:
+            sim_v = float(self.sim_line_vrms.get())
+        except ValueError:
+            sim_v = None
+        self.capture_btn.configure(state="disabled")
+        self.status.set("capturing…")
+        self._cmd_q.put(("capture", sim_v))
+
+    def _on_end_session(self):
+        if self._cmd_q is not None:
+            self._cmd_q.put(("end", None))
+        self.capture_btn.configure(state="disabled")
+        self.end_btn.configure(state="disabled")
+        self.status.set("ending session…")
+
+    def _session_run(self, s: dict):
+        from .instruments import make_dmm, make_scope, make_pmu
+        from .virtualbench import VirtualBench
+        from .sequencer import capture_manual
+        import time
+
+        bench = VirtualBench() if s["simulate"] else None
+        use_scope = s["use_scope"] and (s["simulate"] or s["scope_ip"])
+        opened = []
+        pmu = None
+        try:
+            dmm = make_dmm(s["simulate"], port=s["dmm_port"], baud=s["dmm_baud"],
+                           parity=s["dmm_parity"], bench=bench)
+            scope = (make_scope(s["simulate"], ip=s["scope_ip"], channel=s["scope_ch"],
+                                bench=bench) if use_scope else None)
+            pmu = make_pmu(s["simulate"], port=s["pmu_port"],
+                           volts_per_count=s["vpc"], bench=bench)
+            for inst in (dmm, scope, pmu):
+                if inst is not None:
+                    inst.open(); opened.append(inst)
+            self._q.put(("vpc", pmu.volts_per_count))
+            armed_v = None
+            if s["simulate"]:
+                bench.set_signal(60.0, 120.0, 0.0)     # freq, vrms
+                pmu.arm(60.0, 120.0, 0.0); armed_v = 120.0; time.sleep(2.0)
+
+            while True:
+                cmd, val = self._cmd_q.get()
+                if cmd == "end":
+                    break
+                if cmd != "capture":
+                    continue
+                if s["simulate"] and val is not None and (
+                        armed_v is None or abs(val - armed_v) > 1e-6):
+                    bench.set_signal(60.0, val, 0.0)   # emulate turning the Variac
+                    pmu.arm(60.0, val, 0.0)
+                    armed_v = val
+                    time.sleep(2.2)                    # let the PMU re-lock
+                self._manual_n += 1
+                res = capture_manual(dmm, scope or _NULL_SCOPE, pmu,
+                                     label=f"M{self._manual_n}",
+                                     read_scope=scope is not None)
+                self._q.put(("mpoint", res))
+        except Exception as exc:                              # noqa: BLE001
+            self._q.put(("merror", f"{type(exc).__name__}: {exc}"))
+        finally:
+            for inst in reversed(opened):
+                try:
+                    inst.close()
+                except Exception:                             # noqa: BLE001
+                    pass
+            vpc = pmu.volts_per_count if pmu is not None else 0.0
+            self._q.put(("mdone", vpc))
 
     # --------------------------------------------------------------- worker
     def _run_worker(self, s: dict, points):
@@ -427,6 +567,34 @@ class ValidationGui:
             self._finish(msg[1])
         elif kind == "error":
             self._finish_error(msg[1])
+        elif kind == "mpoint":
+            res = msg[1]
+            self._add_row(res)
+            # Live calibration summary from the DMM-referenced manual points.
+            summ = summarize("amplitude", self._rows, current_vpc=self._current_vpc)
+            self._set_summary(summ.text or "")
+            if summ.recommended_vpc is not None:
+                self._reco_value = summ.recommended_vpc
+                self.reco.configure(text=f"recommended volts_per_count = "
+                                         f"{summ.recommended_vpc:.8g}")
+                self.apply_btn.configure(state="normal")
+            self.capture_btn.configure(
+                state="normal" if (self._session_worker
+                                   and self._session_worker.is_alive()) else "disabled")
+            self.status.set(f"captured {res.point.label}  "
+                            f"(DMM {res.dmm_vrms:.4f} Vrms)" if res.dmm_vrms
+                            else f"captured {res.point.label}")
+        elif kind == "merror":
+            self.status.set("session error")
+            messagebox.showerror("Session failed", msg[1])
+        elif kind == "mdone":
+            self.start_btn.configure(state="normal")
+            self.run_btn.configure(state="normal")
+            self.capture_btn.configure(state="disabled")
+            self.end_btn.configure(state="disabled")
+            n = len(self._rows)
+            self.status.set(f"session ended — {n} point(s) captured"
+                            + (f", wrote {self._save_manual()}" if n else ""))
 
     def _add_row(self, res):
         row = build_row(res)
@@ -489,6 +657,7 @@ class ValidationGui:
     def _finish(self, current_vpc):
         self.run_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
+        self.start_btn.configure(state="normal")
         if not self._rows:
             self.status.set("stopped (no points collected)")
             return
@@ -511,8 +680,17 @@ class ValidationGui:
     def _finish_error(self, text):
         self.run_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
+        self.start_btn.configure(state="normal")
         self.status.set("error")
         messagebox.showerror("Run failed", text)
+
+    def _save_manual(self) -> str:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tag = f"variac_{'sim' if self.simulate.get() else 'hw'}"
+        out = Path("results")
+        csv_path = write_csv(self._rows, out / f"validate_{tag}_{stamp}.csv")
+        save_plot("amplitude", self._rows, out / f"validate_{tag}_{stamp}.png")
+        return csv_path.name
 
     def _apply_reco(self):
         if self._reco_value is not None:
@@ -528,8 +706,12 @@ class ValidationGui:
 
     def _on_close(self):
         self._stop.set()
+        if self._cmd_q is not None:
+            self._cmd_q.put(("end", None))       # unblock the session worker
         if self._worker and self._worker.is_alive():
             self._worker.join(timeout=2.0)
+        if self._session_worker and self._session_worker.is_alive():
+            self._session_worker.join(timeout=2.0)
         self.root.destroy()
 
 
@@ -563,6 +745,15 @@ def main(argv=None) -> int:
         app._nb.select(2)
         app._harm_tab.shape.set("Square")
         root.after(700, app._harm_tab._on_run)
+    if "--demo-variac" in argv:            # manual Variac capture flow (sim)
+        app.simulate.set(True)
+        root.after(200, lambda: app._nb.select(1))
+        root.after(500, app._on_start_session)
+        def _cap(v, t):
+            def go():
+                app.sim_line_vrms.set(str(v)); app._on_capture()
+            root.after(t, go)
+        _cap(120, 3000); _cap(113, 8500); _cap(105, 14000); _cap(98, 19500)
     root.mainloop()
     return 0
 

@@ -88,6 +88,10 @@ class VirtualBench:
     def scope_freq(self) -> float:
         return self.freq_hz + self._rng.gauss(0.0, self.scope_freq_noise_hz)
 
+    def dmm_freq(self) -> float:
+        # 34401A FREQ reading of the same line (slightly noisier than the scope).
+        return self.freq_hz + self._rng.gauss(0.0, 0.003)
+
     def scope_phase_deg(self) -> float:
         return self.phase_deg + self._rng.gauss(0.0, 0.05)
 

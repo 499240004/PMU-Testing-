@@ -64,9 +64,12 @@ Instruments bar:
 1. **Setup Guide** — a wiring diagram (signal path + control cables) and a
    numbered A/B/C hookup checklist, with a per-instrument **Test → *IDN?**
    button to confirm each link.
-2. **Run Validation** — the amplitude/frequency plans, a live results table, an
-   embedded error/TVE plot, and a summary with a one-click **"Use this
-   volts/count"** to load the recommended calibration back in for a re-run.
+2. **Run Validation** — the amplitude/frequency plans (for a programmable
+   source or Simulate), a live results table, an embedded error/TVE plot, and a
+   summary with a one-click **"Use this volts/count"**. Plus a **Variac manual
+   capture** bar (regime A): Start session → dial the Variac → **Capture point**
+   → End session; each capture logs the DMM (the reference, since a Variac isn't
+   PC-controllable) + PMU and builds the `volts_per_count` calibration live.
 3. **Harmonics** — drive a waveform shape (or a custom mix in Simulate) and
    compare per-harmonic content **theoretical vs scope vs PMU** as a grouped bar
    chart + table, with the three THD figures.

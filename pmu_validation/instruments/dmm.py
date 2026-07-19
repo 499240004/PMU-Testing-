@@ -54,6 +54,19 @@ class Hp34401Dmm:
         vals = [self._dev.read_value() for _ in range(max(1, navg))]
         return sum(vals) / len(vals)
 
+    def read_freq(self, navg: int = 1) -> float:
+        """Switch to the FREQ function, read line frequency, restore VAC.
+
+        The 34401A measures one function at a time, so this reconfigures around
+        the read — fine for the manual (per-click) capture cadence.
+        """
+        self._dev.configure("FREQ")
+        try:
+            vals = [self._dev.read_value() for _ in range(max(1, navg))]
+        finally:
+            self._dev.configure("VAC", meas_range=self.meas_range)
+        return sum(vals) / len(vals)
+
 
 class SimDmm:
     """Simulated DMM: reads AC Vrms from the shared bench."""
@@ -86,6 +99,10 @@ class SimDmm:
 
     def read_vrms(self, navg: int = 1) -> float:
         vals = [self.bench.dmm_vrms() for _ in range(max(1, navg))]
+        return sum(vals) / len(vals)
+
+    def read_freq(self, navg: int = 1) -> float:
+        vals = [self.bench.dmm_freq() for _ in range(max(1, navg))]
         return sum(vals) / len(vals)
 
 

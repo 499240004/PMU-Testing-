@@ -51,12 +51,14 @@ def build_row(res: PointResult) -> dict:
         "pmu_tve_pct": p.get("tve"),
         "pmu_n": p.get("n", 0),
         "synced": p.get("synced", False),
+        "dmm_freq_hz": res.dmm_freq,
         # --- derived comparisons ---
         "vmag_err_vs_dmm_pct": _pct(pmu_vmag, dmm),
         "vmag_err_vs_scope_pct": _pct(pmu_vmag, scope_vrms),
         "dmm_vs_scope_pct": _pct(scope_vrms, dmm),   # reference agreement
         "freq_err_vs_cmd_mhz": _mhz(pmu_freq, pt.freq_hz),
         "freq_err_vs_scope_mhz": _mhz(pmu_freq, scope_freq),
+        "freq_err_vs_dmm_mhz": _mhz(pmu_freq, res.dmm_freq),
         # per-point front-end correction factor (dmm / pmu)
         "vpc_correction": (dmm / pmu_vmag) if (dmm and pmu_vmag) else None,
         "note": res.note,

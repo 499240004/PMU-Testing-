@@ -37,6 +37,7 @@ class PointResult:
     dmm_vrms: float | None
     scope: dict = field(default_factory=dict)
     pmu: dict = field(default_factory=dict)
+    dmm_freq: float | None = None      # 34401A FREQ reading (manual/regime A)
     note: str = ""
 
 
@@ -90,3 +91,45 @@ def run_sweep(source, dmm, scope, pmu, points: list[TestPoint],
         if on_progress:
             on_progress(i, total, res)
     return results
+
+
+def capture_manual(dmm, scope, pmu, label: str, *, dmm_navg: int = 4,
+                   scope_navg: int = 2, pmu_navg: int = 8, read_scope: bool = True,
+                   read_freq: bool = True, pmu_timeout_s: float = 8.0) -> PointResult:
+    """One manual capture for the Variac (regime A) flow: read the DMM (the
+    amplitude reference and, via its FREQ function, the frequency reference), the
+    optional scope, and the PMU. There is no commanded setpoint — the operator
+    sets the Variac by hand — so the DMM reading *is* the reference.
+    """
+    note = ""
+    try:
+        dmm_vrms = dmm.read_vrms(navg=dmm_navg)
+    except Exception as exc:                               # noqa: BLE001
+        dmm_vrms, note = None, f"dmm:{exc}; "
+
+    dmm_freq = None
+    if read_freq:
+        try:
+            dmm_freq = dmm.read_freq(navg=max(1, dmm_navg // 2))
+        except Exception as exc:                           # noqa: BLE001
+            note += f"dmmfreq:{exc}; "
+
+    scope_r: dict = {}
+    if read_scope:
+        try:
+            scope_r = scope.read(navg=scope_navg)
+        except Exception as exc:                           # noqa: BLE001
+            note += f"scope:{exc}; "
+
+    try:
+        pmu_r = pmu.read(navg=pmu_navg, timeout_s=pmu_timeout_s)
+    except Exception as exc:                               # noqa: BLE001
+        pmu_r, note = {"n": 0, "synced": False}, note + f"pmu:{exc}; "
+    if pmu_r.get("n", 0) == 0:
+        note += "pmu:no locked report; "
+
+    # Synthesize a point whose 'commanded' fields hold the measured reference, so
+    # the existing row/plot code (x = cmd_vrms) works with DMM as the reference.
+    pt = TestPoint(label=label, freq_hz=(dmm_freq or 60.0), vrms=(dmm_vrms or 0.0))
+    return PointResult(point=pt, dmm_vrms=dmm_vrms, scope=scope_r, pmu=pmu_r,
+                       dmm_freq=dmm_freq, note=note.strip())

@@ -1,71 +1,76 @@
 """Interactive bench setup guide (a tab in the validation GUI).
 
-Rebuilt for clarity: the hookup is presented as a plain-language, numbered
-sequence in three phases —
+Wired for the **as-designed PMU** (schematic 01-0001 Rev I): the board is a
+mains-connected, self-powered instrument. Its IEC/L-N input BOTH powers the
+board (isolated AC/DC modules) AND is the measured quantity (via a galvanically
+isolated LEM LV25-P transducer). So the stimulus is a **Variac at mains level**,
+not the function generator — a 10 Vpp generator can neither reach ~120 VAC nor
+power the board.
 
-    A. Signal wiring   — get the test signal to one shared node
-    B. Control cables  — connect each instrument to the PC
-    C. Configure & verify
+This guide covers the **full-chain (regime A)** hookup:
 
-— matched by a two-panel diagram (signal path on top, control cables below), so
-each picture stays uncluttered. A "Test → *IDN?" button per instrument (in
-phase C) opens it with the settings from the Instruments bar and reports its
-identity, so each link can be confirmed before a run.
+    Variac → PMU IEC/L-N input   (powers + is measured, incl. the transducer)
+    DMM across L-N               (true-RMS Vac + line frequency = the reference)
+    Scope across L-N             (optional; DIFFERENTIAL/HV probe + isolation)
+
+⚠ A Variac is a NON-ISOLATED autotransformer — its output is at mains potential.
+The safety notes below are not optional.
 """
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
 
-SIGNAL = "#1565c0"      # signal-path wires (thick)
+MAINS = "#c62828"       # mains-level signal path (thick red = HIGH VOLTAGE)
 CONTROL = "#8a8f98"     # control / data links (thin dashed)
 NODE_FILL = "#fff3cd"
-SIG_FILL = "#e7f0fb"
+SIG_FILL = "#fde8e8"
 CTL_FILL = "#eef1f4"
 
 # Phases: (letter, title, hint, [(step_text, sub_note_or_None), ...])
 PHASES = [
-    ("A", "Signal wiring — carry the test signal to ONE node",
-     "the thick blue lines in the top picture", [
-        ("Make an injection node (a BNC tee or small terminal block).",
-         "every instrument connects to this ONE point"),
-        ("3325B front OUTPUT (BNC)  →  injection node.", "this is the signal under test"),
-        ("Scope Channel 1 (BNC)  →  injection node.", None),
-        ("DMM front HI and LO terminals  →  injection node.",
-         "HI = signal, LO = ground; press the meter's FRONT button"),
-        ("PMU analog input  →  injection node.", None),
-        ("Tie every instrument's ground together at the node (one common ground).", None),
-        ("Keep the 3325B output OFF until all the wiring above is done.", None),
+    ("A", "Mains input — the Variac powers AND is measured by the PMU",
+     "the thick red lines in the top picture (MAINS LEVEL)", [
+        ("Variac to ZERO, then plug the Variac into wall mains.", None),
+        ("Variac output  →  PMU IEC (C14) inlet, via a standard IEC power cord.",
+         "this both powers the board and is the measured signal"),
+        ("Bring the Variac slowly up to ~120 VAC; the PMU powers up and its USB "
+         "port enumerates.", "input fuse is 250 mA; the MOV clamps above ~430 V"),
     ]),
-    ("B", "Control cables — connect each instrument to the PC",
-     "the dashed lines in the bottom picture", [
-        ("3325B rear RS-232  →  a PC COM port  (NULL-MODEM cable).", None),
-        ("DMM rear RS-232  →  a PC COM port  (NULL-MODEM cable).", None),
-        ("Scope LAN port  →  your network, or straight to the PC.", None),
-        ("PMU user USB (CN13)  →  the PC.", "CN13 is the user USB, NOT the ST-LINK USB"),
+    ("B", "Reference taps across the Variac output (L–N)",
+     None, [
+        ("DMM front HI / LO across the Variac output (HI = L, LO = N); set VAC.",
+         "the 34401A also reads line FREQUENCY — your frequency reference"),
+        ("(Optional) Scope across L–N with a DIFFERENTIAL or 10× HV probe, and an "
+         "ISOLATION TRANSFORMER on the Variac.",
+         "no differential/HV probe or isolation? skip the scope — the DMM is the reference"),
+        ("GPS antenna → PMU, with a clear sky view.",
+         "needed for UTC time-sync / phase / TVE; NOT needed for magnitude or frequency"),
     ]),
-    ("C", "Configure & verify", None, [
-        ("3325B: rear DIP switches set baud/parity (factory = 300 baud, 7E1).", None),
-        ("DMM front panel: I/O menu → RS-232, set BAUD + PARITY, LANGUAGE = SCPI.", None),
-        ("Scope: note its IP (Utilities → I/O → LAN); make sure its firewall is off.", None),
-        ("PMU: set the AD7606C straps — PAR/SER SEL = high, OS2 = OS1 = OS0 = 1.", None),
-        ("In the Instruments bar at the top, type each port / IP to match.", None),
-        ("Click each Test button below — you want a green ✓ from all four.", None),
+    ("C", "Control cables & verify", None, [
+        ("PMU user USB (CN13)  →  PC.", "CN13 is the user USB, NOT the ST-LINK USB"),
+        ("DMM rear RS-232  →  PC COM  (NULL-MODEM cable); front panel I/O menu: "
+         "RS-232, set BAUD + PARITY, LANGUAGE = SCPI.", None),
+        ("Enter the DMM port and PMU port in the Instruments bar; click each "
+         "Test → *IDN? for a green ✓.", None),
     ]),
 ]
 
-# Instruments to show a Test button for, in phase C.
-TESTABLE = [("source", "3325B"), ("dmm", "DMM"), ("scope", "Scope"), ("pmu", "PMU")]
+# Instruments with a Test button (the Variac isn't a controllable instrument).
+TESTABLE = [("dmm", "DMM"), ("scope", "Scope"), ("pmu", "PMU")]
 
 CAUTIONS = [
-    "Both RS-232 links (3325B and DMM) need a NULL-MODEM / crossover cable — a "
-    "straight-through cable will not talk.",
-    "Don't drive the 3325B over HP-IB and RS-232 at the same time.",
-    "Don't use the DMM's RS-232 if it's set to output pass/fail on pins 1 & 9 "
-    "(the manual warns it can damage the port).",
-    "Signal level: stay within the 3325B's output range AND your PMU front-end "
-    "input range.",
-    "A GPS antenna is only needed for phase/TVE later — not for magnitude/frequency.",
+    "DANGER: a Variac is a NON-ISOLATED autotransformer — its output and the PMU "
+    "L-N input sit at MAINS potential. Use an isolation transformer; treat all "
+    "input wiring as live and lethal.",
+    "Scope ground is earth-referenced — NEVER clip it to L or N. Use a "
+    "differential or 10× HV probe (1 MΩ), never DC50. If unsure, skip the scope.",
+    "The PMU's measurement side is isolated (LV25-P + isolated supplies), but the "
+    "IEC / L-N INPUT terminals are at mains — the isolation is inside the board.",
+    "Bring the Variac up slowly and watch the current; the input fuse is 250 mA.",
+    "The 3325B is NOT used in this hookup: driving the PMU input needs mains-level "
+    "voltage and power a function generator can't supply. Its low-level "
+    "signal-injection mode (regime B) needs board access and is deferred.",
 ]
 
 
@@ -80,11 +85,11 @@ class SetupGuideFrame(ttk.Frame):
     def _build(self):
         left = ttk.Frame(self)
         left.pack(side="left", fill="y", padx=(6, 3), pady=6)
-        ttk.Label(left, text="How it's wired", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        ttk.Label(left, text="How it's wired (Variac / full-chain)",
+                  font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self.canvas = tk.Canvas(left, width=560, height=470, background="white",
                                 highlightthickness=1, highlightbackground="#ccc")
         self.canvas.pack()
-        self._draw_diagram()
 
         right = ttk.Frame(self)
         right.pack(side="left", fill="both", expand=True, padx=(3, 6), pady=6)
@@ -94,6 +99,7 @@ class SetupGuideFrame(ttk.Frame):
                   font=("Segoe UI", 10, "bold")).pack(side="left", anchor="w")
         self.progress_lbl = ttk.Label(head, text="", foreground="#555")
         self.progress_lbl.pack(side="right")
+        self._draw_diagram()
         self._build_checklist(right)
 
     # --------------------------------------------------------------- diagram
@@ -111,40 +117,41 @@ class SetupGuideFrame(ttk.Frame):
 
     def _draw_diagram(self):
         c = self.canvas
-        # ---- Panel ① : signal wiring -------------------------------------
-        c.create_text(12, 12, anchor="w", text="① Signal wiring — one shared node",
-                      font=("Segoe UI", 9, "bold"), fill=SIGNAL)
-        self._box(15, 92, 120, 44, "HP 3325B\nOUTPUT", SIG_FILL)
-        self._box(232, 92, 86, 44, "INJECTION\nNODE", NODE_FILL, outline="#b8860b")
-        self._box(400, 30, 150, 40, "Scope — CH1", SIG_FILL)
-        self._box(400, 92, 150, 44, "DMM — HI / LO", SIG_FILL)
-        self._box(400, 160, 150, 40, "PMU — analog in", SIG_FILL)
-        self._link((135, 114), (232, 114), SIGNAL, 3, label="sine", ly=-8)
-        self._link((318, 108), (400, 55), SIGNAL, 3)
-        self._link((318, 114), (400, 114), SIGNAL, 3)
-        self._link((318, 122), (400, 178), SIGNAL, 3)
-        # ground under the node
-        c.create_line(275, 136, 275, 150, fill="#444", width=2)
-        for i, wg in enumerate((20, 13, 6)):
-            c.create_line(275 - wg, 150 + i * 4, 275 + wg, 150 + i * 4, fill="#444", width=2)
-        c.create_text(275, 170, text="common ground", fill="#444", font=("Segoe UI", 7))
+        # ---- Panel ① : mains input (Variac powers + is measured) ----------
+        c.create_text(12, 12, anchor="w",
+                      text="① Mains input — Variac powers AND is measured",
+                      font=("Segoe UI", 9, "bold"), fill=MAINS)
+        self._box(15, 40, 110, 30, "wall mains\n120 VAC", "#eeeeee")
+        self._box(15, 92, 110, 48, "VARIAC\n0–140 VAC", "#eeeeee")
+        self._box(232, 90, 118, 54, "PMU\nIEC / L–N input", NODE_FILL, outline="#b8860b")
+        self._box(415, 38, 145, 46, "DMM across L–N\n(Vac + freq ref)", SIG_FILL)
+        self._box(415, 150, 145, 46, "Scope across L–N\n(diff probe · optional)", SIG_FILL)
+        c.create_line(70, 70, 70, 92, fill="#999", width=1, arrow="last")
+        self._link((125, 116), (232, 116), MAINS, 3, label="IEC cord · 120 VAC", ly=-8)
+        self._link((350, 108), (415, 61), MAINS, 3, label="L–N", lx=6, ly=-6)
+        self._link((350, 126), (415, 173), MAINS, 3, label="L–N", lx=6, ly=8)
+        c.create_text(288, 165, text="⚡ MAINS LEVEL — non-isolated", fill=MAINS,
+                      font=("Segoe UI", 8, "bold"))
 
-        c.create_line(8, 218, 552, 218, fill="#ddd")
+        c.create_line(8, 205, 552, 205, fill="#ddd")
 
-        # ---- Panel ② : control cables ------------------------------------
-        c.create_text(12, 232, anchor="w", text="② Control cables — each instrument → PC",
+        # ---- Panel ② : control + timing ----------------------------------
+        c.create_text(12, 220, anchor="w", text="② Control cables + timing",
                       font=("Segoe UI", 9, "bold"), fill="#555")
-        self._box(232, 322, 86, 44, "PC / laptop", "#e8eef7")
-        self._box(15, 300, 120, 40, "HP 3325B", CTL_FILL)
-        self._box(15, 380, 120, 40, "HP 34401A", CTL_FILL)
-        self._box(400, 300, 150, 40, "MSO8104A", CTL_FILL)
-        self._box(400, 380, 150, 40, "micro-PMU", CTL_FILL)
-        self._link((232, 338), (135, 320), CONTROL, 1, dash=(4, 3), label="RS-232*", ly=-7)
-        self._link((232, 350), (135, 400), CONTROL, 1, dash=(4, 3), label="RS-232*", ly=8)
-        self._link((318, 338), (400, 320), CONTROL, 1, dash=(4, 3), label="LAN", ly=-7)
-        self._link((318, 350), (400, 400), CONTROL, 1, dash=(4, 3), label="USB", ly=8)
-        c.create_text(12, 440, anchor="w", text="* null-modem (crossover) cable",
+        self._box(250, 300, 96, 44, "PC / laptop", "#e8eef7")
+        self._box(20, 285, 112, 38, "micro-PMU", CTL_FILL)
+        self._box(150, 285, 120, 38, "GPS antenna", CTL_FILL)
+        self._box(20, 360, 112, 38, "HP 34401A", CTL_FILL)
+        self._box(415, 300, 145, 40, "MSO8104A (opt)", CTL_FILL)
+        self._link((150, 304), (132, 304), CONTROL, 1, label="1PPS/NMEA", ly=-8)
+        self._link((132, 308), (250, 318), CONTROL, 1, dash=(4, 3), label="USB", ly=-7)
+        self._link((132, 379), (250, 332), CONTROL, 1, dash=(4, 3), label="RS-232*", ly=8)
+        self._link((415, 320), (346, 322), CONTROL, 1, dash=(4, 3), label="LAN", ly=-7)
+        c.create_text(12, 415, anchor="w", text="* null-modem (crossover) cable",
                       fill="#8a5a00", font=("Segoe UI", 8))
+        c.create_text(12, 435, anchor="w",
+                      text="Variac is the stimulus — not a PC-controlled instrument.",
+                      fill="#555", font=("Segoe UI", 8, "italic"))
 
     # -------------------------------------------------------------- checklist
     def _build_checklist(self, parent):
@@ -180,14 +187,13 @@ class SetupGuideFrame(ttk.Frame):
             if letter == "C":
                 self._build_test_row(sec)
 
-        # Heads-up box (kept out of the numbered flow to reduce clutter).
-        warn = ttk.LabelFrame(inner, text="  Heads-up  ")
+        warn = ttk.LabelFrame(inner, text="  ⚠ Safety — read before powering up  ")
         warn.pack(fill="x", expand=True, padx=4, pady=(6, 8))
         for caution in CAUTIONS:
             row = ttk.Frame(warn)
             row.pack(fill="x", padx=6, pady=1)
-            ttk.Label(row, text="⚠", foreground="#b06a00").pack(side="left", anchor="n")
-            ttk.Label(row, text=caution, foreground="#8a5a00", wraplength=430,
+            ttk.Label(row, text="⚠", foreground="#b00020").pack(side="left", anchor="n")
+            ttk.Label(row, text=caution, foreground="#8a2a2a", wraplength=430,
                       justify="left").pack(side="left", fill="x", expand=True)
         self._update_progress()
 

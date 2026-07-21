@@ -16,6 +16,9 @@ venv/
 results/
 *.log
 
+# --- Per-unit bench calibration (specific to the physical PMU on the bench) ---
+pmu_validation/calibration.json
+
 # --- Editor / OS -------------------------------------------------------------
 .vscode/
 .idea/

@@ -121,6 +121,21 @@ class _PmuBase:
             "n": n,
         }
 
+    def capture_waveform(self, seconds: float = 0.15):
+        """Return ``(t_seconds, volts)`` for the last ``seconds`` of the PMU's
+        continuous ADC stream, reconstructed to grid volts (counts * vpc). This
+        is the time-domain signal to overlay against the scope. ``None`` until
+        the stream has produced a block."""
+        import numpy as np
+        rec = self.engine.continuous_samples(seconds) if self.engine else None
+        if rec is None:
+            return None
+        fs, volts = rec
+        if volts is None or volts.size == 0:
+            return None
+        t = (np.arange(volts.size) / fs) if fs else np.arange(volts.size, dtype=float)
+        return t, volts
+
     def read_spectrum(self, f0: float, n_harmonics: int = 13,
                       seconds: float = 1.0, settle_s: float = 0.0):
         """Analyze the PMU's own continuous ADC stream for harmonics.
@@ -202,5 +217,10 @@ def make_pmu(simulate: bool, *, port: str | None = None, baud: int = 115200,
              bench: VirtualBench | None = None):
     if simulate:
         return SimPmu(bench, volts_per_count=volts_per_count, report_rate=report_rate)
+    # On real hardware, if the caller didn't pin a scale, use the persisted
+    # bench calibration (falls through to the firmware default if none exists).
+    if volts_per_count is None:
+        from ..calibration import load_calibration
+        volts_per_count = load_calibration()
     return SerialPmu(port, baud=baud, volts_per_count=volts_per_count,
                      report_rate=report_rate)

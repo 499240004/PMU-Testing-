@@ -32,6 +32,10 @@ _SRC_UPMU = APPS / "power-brick" / "host"
 
 def _ensure(path: Path, marker: str, app: str) -> None:
     """Put *path* on sys.path, or explain how to obtain the missing submodule."""
+    # In a frozen build the app modules are collected straight into the bundle
+    # and are importable by name -- there is no ``apps/`` tree to add.
+    if getattr(sys, "frozen", False):
+        return
     if not (path / marker).exists():
         raise ModuleNotFoundError(
             f"Cannot find '{marker}' under {path}. The '{app}' submodule looks "

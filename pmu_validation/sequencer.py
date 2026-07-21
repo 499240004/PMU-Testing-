@@ -53,6 +53,12 @@ def run_sweep(source, dmm, scope, pmu, points: list[TestPoint],
     read error is captured in the row's ``note`` rather than aborting the run,
     so one flaky point does not throw away the whole sweep.
 
+    ``source`` may be ``None`` for a source-less (Variac / regime-A) bench: with
+    no programmable stimulus to command, each point instead becomes a
+    DMM-referenced capture at the *current* line condition (the same read the
+    manual Variac flow does), so DMM/scope/PMU are still compared apples-to-
+    apples. Settling still applies between points.
+
     ``stop_event`` (a :class:`threading.Event`) lets a GUI cancel the sweep
     between points; already-collected results are returned.
     """
@@ -61,6 +67,20 @@ def run_sweep(source, dmm, scope, pmu, points: list[TestPoint],
     for i, pt in enumerate(points, 1):
         if stop_event is not None and stop_event.is_set():
             break
+
+        if source is None:
+            # No stimulus to command: settle, then capture with the DMM as the
+            # reference (freq from its FREQ function). Reuses the manual path.
+            time.sleep(pt.settle_s)
+            res = capture_manual(dmm, scope, pmu, label=pt.label,
+                                 dmm_navg=pt.dmm_navg, scope_navg=pt.scope_navg,
+                                 pmu_navg=pt.pmu_navg, read_scope=read_scope,
+                                 pmu_timeout_s=pt.pmu_timeout_s)
+            results.append(res)
+            if on_progress:
+                on_progress(i, total, res)
+            continue
+
         note = ""
         source.set_signal(pt.freq_hz, pt.vrms, pt.phase_deg)
         pmu.arm(pt.freq_hz, pt.vrms, pt.phase_deg)

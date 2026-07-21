@@ -31,8 +31,12 @@ from matplotlib.figure import Figure
 from . import plan as plans
 from .results import build_row, write_csv, summarize, plot as save_plot
 from .sequencer import run_sweep
+from .paths import results_dir
 from .setup_guide import SetupGuideFrame
 from .harmonics_tab import HarmonicsFrame
+from .calibration_tab import CalibrationFrame
+from .waveform_tab import WaveformFrame
+from .monitor_tab import MonitorFrame
 
 # Which derived columns to plot per plan (label, row-key, axis).
 _PLOT_SERIES = {
@@ -100,13 +104,21 @@ class ValidationGui:
         self.simulate = tk.BooleanVar(value=True)
         self.plan_name = tk.StringVar(value="amplitude")
         # connection
+        # No programmable source on this Variac (regime-A) bench by default.
+        # When off, the sweep captures at the current line condition (DMM ref).
+        self.use_source = tk.BooleanVar(value=False)
         self.source_port = tk.StringVar(value="COM5")
         self.source_baud = tk.StringVar(value="4800")
-        self.dmm_port = tk.StringVar(value="COM10")
+        # Bench defaults verified 2026-07-20 (see memory: bench-connections).
+        # The 34401A front panel is set to EVEN parity -> parity "N" returns
+        # garbled data; the driver switches to 7 data bits automatically for E.
+        self.dmm_port = tk.StringVar(value="COM11")
         self.dmm_baud = tk.StringVar(value="9600")
-        self.dmm_parity = tk.StringVar(value="N")
+        self.dmm_parity = tk.StringVar(value="E")
         self.scope_ip = tk.StringVar(value="169.254.220.205")
         self.scope_ch = tk.StringVar(value="1")
+        # CH1 is the 200:1 HV differential probe on L-N (same node as the DMM).
+        self.scope_probe = tk.StringVar(value="200")
         self.use_scope = tk.BooleanVar(value=True)
         self.pmu_port = tk.StringVar(value="auto")
         # test params
@@ -139,9 +151,21 @@ class ValidationGui:
         self._build_plot(body)
         self._build_summary(run_tab)
 
+        cal_tab = CalibrationFrame(nb, self)
+        nb.add(cal_tab, text="  3 · Calibration  ")
+        self._cal_tab = cal_tab
+
+        wave_tab = WaveformFrame(nb, self)
+        nb.add(wave_tab, text="  4 · Waveform  ")
+        self._wave_tab = wave_tab
+
         harm_tab = HarmonicsFrame(nb, self)
-        nb.add(harm_tab, text="  3 · Harmonics  ")
+        nb.add(harm_tab, text="  5 · Harmonics  ")
         self._harm_tab = harm_tab
+
+        mon_tab = MonitorFrame(nb, self)
+        nb.add(mon_tab, text="  6 · Monitor  ")
+        self._mon_tab = mon_tab
 
         self._build_statusbar()
 
@@ -162,17 +186,23 @@ class ValidationGui:
                         command=self._on_mode_change).grid(row=0, column=0, columnspan=2,
                                                            sticky="w", padx=8, pady=4)
         self._hw = []
-        self._hw.append(self._labeled(f, "3325B port", self.source_port, 8, 2))
-        self._hw.append(self._labeled(f, "baud", self.source_baud, 7, 4))
+        # The 3325B source is optional (regime A uses a Variac, no source).
+        ttk.Checkbutton(f, text="use 3325B source", variable=self.use_source,
+                        command=self._on_mode_change).grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=8)
+        self._src_hw = []
+        self._src_hw.append(self._labeled(f, "3325B port", self.source_port, 8, 2))
+        self._src_hw.append(self._labeled(f, "baud", self.source_baud, 7, 4))
         self._hw.append(self._labeled(f, "DMM port", self.dmm_port, 8, 6))
         self._hw.append(self._labeled(f, "baud", self.dmm_baud, 7, 8))
         self._hw.append(self._labeled(f, "parity", self.dmm_parity, 4, 10,
                                       values=["N", "E", "O"]))
         self._hw.append(self._labeled(f, "Scope IP", self.scope_ip, 16, 2, row=1))
         self._hw.append(self._labeled(f, "ch", self.scope_ch, 4, 4, row=1))
+        self._hw.append(self._labeled(f, "probe", self.scope_probe, 5, 6, row=1))
         ttk.Checkbutton(f, text="use scope", variable=self.use_scope).grid(
-            row=1, column=6, columnspan=2, sticky="w", padx=8)
-        self._hw.append(self._labeled(f, "PMU port", self.pmu_port, 8, 8, row=1))
+            row=2, column=0, columnspan=2, sticky="w", padx=8)
+        self._hw.append(self._labeled(f, "PMU port", self.pmu_port, 8, 2, row=2))
 
     def _build_test_bar(self, parent):
         f = ttk.LabelFrame(parent, text="Test plan")
@@ -279,6 +309,11 @@ class ValidationGui:
                             else "readonly")
             except tk.TclError:
                 w.configure(state=state)
+        # Source fields are live only on real hardware AND when the 3325B is used.
+        src_state = "normal" if (not self.simulate.get() and self.use_source.get()) \
+            else "disabled"
+        for w in self._src_hw:
+            w.configure(state=src_state)
 
     def _on_plan_change(self):
         if self.plan_name.get() == "amplitude":
@@ -333,10 +368,12 @@ class ValidationGui:
 
         settings = {
             "simulate": self.simulate.get(),
+            "use_source": self.use_source.get(),
             "source_port": self.source_port.get(), "source_baud": int(self.source_baud.get()),
             "dmm_port": self.dmm_port.get(), "dmm_baud": int(self.dmm_baud.get()),
             "dmm_parity": self.dmm_parity.get(),
             "scope_ip": self.scope_ip.get(), "scope_ch": int(self.scope_ch.get()),
+            "scope_probe": float(self.scope_probe.get() or 1),
             "use_scope": self.use_scope.get(),
             "pmu_port": self.pmu_port.get(),
             "vpc": float(self.vpc.get()) if self.vpc.get().strip() else None,
@@ -369,6 +406,7 @@ class ValidationGui:
             "dmm_port": self.dmm_port.get(), "dmm_baud": int(self.dmm_baud.get()),
             "dmm_parity": self.dmm_parity.get(),
             "scope_ip": self.scope_ip.get(), "scope_ch": int(self.scope_ch.get()),
+            "scope_probe": float(self.scope_probe.get() or 1),
             "use_scope": self.use_scope.get(), "pmu_port": self.pmu_port.get(),
             "vpc": float(self.vpc.get()) if self.vpc.get().strip() else None,
         }
@@ -413,7 +451,8 @@ class ValidationGui:
             dmm = make_dmm(s["simulate"], port=s["dmm_port"], baud=s["dmm_baud"],
                            parity=s["dmm_parity"], bench=bench)
             scope = (make_scope(s["simulate"], ip=s["scope_ip"], channel=s["scope_ch"],
-                                bench=bench) if use_scope else None)
+                                probe_atten=s["scope_probe"], bench=bench)
+                     if use_scope else None)
             pmu = make_pmu(s["simulate"], port=s["pmu_port"],
                            volts_per_count=s["vpc"], bench=bench)
             for inst in (dmm, scope, pmu):
@@ -460,14 +499,20 @@ class ValidationGui:
 
         bench = VirtualBench() if s["simulate"] else None
         use_scope = s["use_scope"] and (s["simulate"] or s["scope_ip"])
+        # Simulate always needs the SimSource (it drives the bench); on real
+        # hardware the 3325B is used only if explicitly enabled. Otherwise the
+        # sweep runs source-less and captures the current line condition.
+        want_source = s["simulate"] or s.get("use_source", False)
         opened = []
         try:
-            source = make_source(s["simulate"], port=s["source_port"],
-                                 baud=s["source_baud"], bench=bench)
+            source = (make_source(s["simulate"], port=s["source_port"],
+                                  baud=s["source_baud"], bench=bench)
+                      if want_source else None)
             dmm = make_dmm(s["simulate"], port=s["dmm_port"], baud=s["dmm_baud"],
                            parity=s["dmm_parity"], bench=bench)
             scope = (make_scope(s["simulate"], ip=s["scope_ip"], channel=s["scope_ch"],
-                                bench=bench) if use_scope else None)
+                                probe_atten=s["scope_probe"], bench=bench)
+                     if use_scope else None)
             pmu = make_pmu(s["simulate"], port=s["pmu_port"], volts_per_count=s["vpc"],
                            bench=bench)
             for inst in (source, dmm, scope, pmu):
@@ -523,7 +568,9 @@ class ValidationGui:
                                 parity=self.dmm_parity.get(), bench=bench)
             elif key == "scope":
                 inst = make_scope(sim, ip=self.scope_ip.get(),
-                                  channel=int(self.scope_ch.get()), bench=bench)
+                                  channel=int(self.scope_ch.get()),
+                                  probe_atten=float(self.scope_probe.get() or 1),
+                                  bench=bench)
             elif key == "pmu":
                 inst = make_pmu(sim, port=self.pmu_port.get(), bench=bench)
             else:
@@ -671,7 +718,7 @@ class ValidationGui:
         # Persist CSV + PNG alongside the CLI outputs.
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         tag = f"{self._kind}_{'sim' if self.simulate.get() else 'hw'}_gui"
-        out = Path("results")
+        out = results_dir()
         csv_path = write_csv(self._rows, out / f"validate_{tag}_{stamp}.csv")
         png = save_plot(self._kind, self._rows, out / f"validate_{tag}_{stamp}.png")
         self.status.set(f"done — wrote {csv_path}"
@@ -687,7 +734,7 @@ class ValidationGui:
     def _save_manual(self) -> str:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         tag = f"variac_{'sim' if self.simulate.get() else 'hw'}"
-        out = Path("results")
+        out = results_dir()
         csv_path = write_csv(self._rows, out / f"validate_{tag}_{stamp}.csv")
         save_plot("amplitude", self._rows, out / f"validate_{tag}_{stamp}.png")
         return csv_path.name
@@ -728,7 +775,19 @@ def main(argv=None) -> int:
     if "--self-test" in argv:              # construct-only smoke check
         root.update_idletasks()
         root.destroy()
-        print("gui self-test OK")
+        # Also exercise the dynamic vendored-driver imports so a frozen build
+        # proves upmu/hp34401/scope/hp3325 resolve inside the bundle.
+        from . import _vendor
+        checks = []
+        for name, fn in (("upmu", _vendor.import_upmu),
+                         ("hp34401", _vendor.import_hp34401),
+                         ("scope", _vendor.import_scope),
+                         ("hp3325", _vendor.import_hp3325)):
+            try:
+                fn(); checks.append(f"{name}=ok")
+            except Exception as exc:               # noqa: BLE001
+                checks.append(f"{name}=FAIL:{type(exc).__name__}")
+        print("gui self-test OK; vendor:", " ".join(checks))
         return 0
     if "--demo" in argv:                   # auto-run a short simulate sweep
         app.simulate.set(True)
@@ -742,7 +801,7 @@ def main(argv=None) -> int:
             root.after(500 + i * 150, lambda k=key: app.start_instrument_test(k))
     if "--demo-harm" in argv:              # analyze a square-wave stimulus (sim)
         app.simulate.set(True)
-        app._nb.select(2)
+        app._nb.select(app._harm_tab)
         app._harm_tab.shape.set("Square")
         root.after(700, app._harm_tab._on_run)
     if "--demo-variac" in argv:            # manual Variac capture flow (sim)

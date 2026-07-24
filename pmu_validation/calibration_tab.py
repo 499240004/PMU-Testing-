@@ -37,6 +37,8 @@ class CalibrationFrame(ttk.Frame):
         self._q: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._stop = threading.Event()
+        self._last_vpc: float | None = None   # last successful result (for board write)
+        self._last_sim = False
         self._build_vars()
         self._build()
         self._refresh_current()
@@ -67,6 +69,11 @@ class CalibrationFrame(ttk.Frame):
         self.stop_btn = ttk.Button(top, text="■ Stop", command=self._on_stop,
                                    state="disabled")
         self.stop_btn.grid(row=0, column=5, padx=2)
+        # Provision the result into the board's flash (sector 7) over the
+        # Nucleo's ST-LINK; enabled after a successful hardware calibration.
+        self.write_btn = ttk.Button(top, text="⚡ Write to board",
+                                    command=self._on_write_board, state="disabled")
+        self.write_btn.grid(row=0, column=8, padx=(12, 4))
 
         self._sim_lbl = ttk.Label(top, text="Sim line Vrms:")
         self._sim_lbl.grid(row=0, column=6, sticky="e", padx=(16, 2))
@@ -130,8 +137,11 @@ class CalibrationFrame(ttk.Frame):
             "sim_line": float(self.sim_line.get() or 120),
         }
         self._stop.clear()
+        self._last_vpc = None
+        self._last_sim = s["simulate"]
         self.run_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
+        self.write_btn.configure(state="disabled")
         self.status.set(f"averaging {n} points…")
         self._worker = threading.Thread(target=self._calibrate, args=(s,), daemon=True)
         self._worker.start()
@@ -140,6 +150,31 @@ class CalibrationFrame(ttk.Frame):
         self._stop.set()
         self.stop_btn.configure(state="disabled")
         self.status.set("stopping — will average the points captured so far…")
+
+    def _on_write_board(self):
+        """Provision the last calibration into the board's flash (sector 7)."""
+        if self._last_vpc is None:
+            return
+        vpc = self._last_vpc
+        if not messagebox.askokcancel(
+                "Write calibration to board",
+                f"Write volts_per_count = {vpc:.8g} into the PMU's flash "
+                f"(sector 7) via the on-board ST-LINK?\n\n"
+                f"The board resets afterwards, so any live stream (monitor, "
+                f"waveform) will drop for a few seconds and reconnect."):
+            return
+        self.write_btn.configure(state="disabled")
+        self.status.set("writing calibration to board via ST-LINK…")
+
+        def work():
+            from . import boardcal
+            try:
+                boardcal.write_to_board(vpc)
+                self._q.put(("board_ok", vpc))
+            except Exception as exc:                      # noqa: BLE001
+                self._q.put(("board_err", f"{type(exc).__name__}: {exc}"))
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------------------------------------- worker thread
     def _calibrate(self, s: dict):
@@ -169,8 +204,12 @@ class CalibrationFrame(ttk.Frame):
                     break
                 # Light per-point averaging -- the 20-point average does the
                 # noise reduction, so keep each capture fast (~1-2 s).
+                # require_sync=False: the vpc ratio is amplitude-only, and GPS
+                # sync gates nothing about magnitude -- without it a benchtop
+                # with no PPS can never calibrate.
                 res = capture_manual(dmm, None, pmu, label="", read_scope=False,
-                                     read_freq=False, dmm_navg=1, pmu_navg=3)
+                                     read_freq=False, dmm_navg=1, pmu_navg=3,
+                                     require_sync=False)
                 dmm_v = res.dmm_vrms
                 pmu_v = (res.pmu or {}).get("vmag")
                 if dmm_v and pmu_v:
@@ -205,7 +244,7 @@ class CalibrationFrame(ttk.Frame):
                 if self._stop.is_set():
                     break
                 res = capture_manual(dmm, None, pmu, label="", read_scope=False,
-                                     read_freq=False)
+                                     read_freq=False, require_sync=False)
                 dmm_v = res.dmm_vrms
                 pmu_v = (res.pmu or {}).get("vmag")
                 if dmm_v and pmu_v:
@@ -255,11 +294,28 @@ class CalibrationFrame(ttk.Frame):
         elif kind == "done":
             self.run_btn.configure(state="normal")
             self.stop_btn.configure(state="disabled")
+        elif kind == "board_ok":
+            self.status.set(f"calibration {msg[1]:.8g} written to board flash — "
+                            f"board is resetting, reconnect in a few seconds")
+            messagebox.showinfo(
+                "Board provisioned",
+                f"volts_per_count = {msg[1]:.8g} written to flash sector 7 and "
+                f"verified.\n\nThe board reset; once it re-enumerates, every "
+                f"host that connects will pick this value up from STATUS "
+                f"(shown as 'cal=…' in the PMU identify string).")
+            self.write_btn.configure(state="normal")
+        elif kind == "board_err":
+            messagebox.showerror("Board write failed", msg[1])
+            self.status.set("board write failed")
+            self.write_btn.configure(state="normal")
 
     def _apply_result(self, r):
         # Push the new scale into the shared field so every other tab uses it.
         self.app.vpc.set(f"{r['new_vpc']:.8g}")
         self._refresh_current()
+        self._last_vpc = r["new_vpc"]
+        if not self._last_sim:      # provisioning needs real hardware (ST-LINK)
+            self.write_btn.configure(state="normal")
         resid = r["resid"]
         resid_s = f"{resid:+.3f}%" if resid == resid else "n/a"
         self.summary.configure(

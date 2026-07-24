@@ -115,11 +115,15 @@ def run_sweep(source, dmm, scope, pmu, points: list[TestPoint],
 
 def capture_manual(dmm, scope, pmu, label: str, *, dmm_navg: int = 4,
                    scope_navg: int = 2, pmu_navg: int = 8, read_scope: bool = True,
-                   read_freq: bool = True, pmu_timeout_s: float = 8.0) -> PointResult:
+                   read_freq: bool = True, pmu_timeout_s: float = 8.0,
+                   require_sync: bool = True) -> PointResult:
     """One manual capture for the Variac (regime A) flow: read the DMM (the
     amplitude reference and, via its FREQ function, the frequency reference), the
     optional scope, and the PMU. There is no commanded setpoint — the operator
     sets the Variac by hand — so the DMM reading *is* the reference.
+
+    ``require_sync=False`` accepts unsynced PMU reports: amplitude-only captures
+    (calibration) don't need the GPS/UTC anchor, only phase/TVE do.
     """
     note = ""
     try:
@@ -142,7 +146,8 @@ def capture_manual(dmm, scope, pmu, label: str, *, dmm_navg: int = 4,
             note += f"scope:{exc}; "
 
     try:
-        pmu_r = pmu.read(navg=pmu_navg, timeout_s=pmu_timeout_s)
+        pmu_r = pmu.read(navg=pmu_navg, timeout_s=pmu_timeout_s,
+                         require_sync=require_sync)
     except Exception as exc:                               # noqa: BLE001
         pmu_r, note = {"n": 0, "synced": False}, note + f"pmu:{exc}; "
     if pmu_r.get("n", 0) == 0:

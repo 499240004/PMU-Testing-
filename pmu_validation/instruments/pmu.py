@@ -21,6 +21,7 @@ sequencer:
 """
 from __future__ import annotations
 
+import math
 import time
 
 from .._vendor import import_upmu
@@ -41,6 +42,13 @@ class _PmuBase:
         self.engine = None
         self.receiver = None
         self._source = None
+        # Scale precedence: explicit/JSON (pinned here) > board-reported
+        # (STATUS cal_volts_per_count, adopted lazily below) > firmware default.
+        self._vpc_pinned = volts_per_count is not None
+        # The engine itself adopts the board cal (upmu v4); disable that when
+        # the caller pinned a scale so the explicit/JSON value always wins.
+        cfg.adopt_board_cal = not self._vpc_pinned
+        self._board_cal: float | None = None
 
     @property
     def volts_per_count(self) -> float:
@@ -49,10 +57,24 @@ class _PmuBase:
     def identify(self) -> str:
         st = getattr(self.engine, "status", None) if self.engine else None
         if st is not None:
+            cal = float(getattr(st, "cal_volts_per_count", 0.0) or 0.0)
+            cal_s = f"cal={cal:.6g}" if cal > 0.0 else "cal=unprovisioned"
             return (f"Elastic Energy micro-PMU fw {st.fw_version_major}."
-                    f"{st.fw_version_minor} (adc_id=0x{st.adc_id:02X})")
+                    f"{st.fw_version_minor} (adc_id=0x{st.adc_id:02X}, {cal_s})")
         return (f"Elastic Energy micro-PMU (upmu host, "
                 f"volts_per_count={self.cfg.volts_per_count:.6g})")
+
+    def _adopt_board_cal(self) -> None:
+        """Adopt the board's flash-provisioned calibration (STATUS, proto v4)
+        when the caller didn't pin a scale. One-shot: the first non-zero value
+        wins for the life of this adapter."""
+        if self._vpc_pinned or self._board_cal is not None or self.engine is None:
+            return
+        st = getattr(self.engine, "status", None)
+        cal = float(getattr(st, "cal_volts_per_count", 0.0) or 0.0) if st else 0.0
+        if cal > 0.0:
+            self._board_cal = cal
+            self.cfg.volts_per_count = cal   # engine applies it per ADC block
 
     def _start_pipeline(self, source) -> None:
         self._teardown_pipeline()
@@ -100,6 +122,7 @@ class _PmuBase:
         period = 1.0 / max(1.0, self.cfg.report_rate)
         while len(got) < navg and time.monotonic() < deadline:
             time.sleep(period)
+            self._adopt_board_cal()
             r = self.engine.report() if self.engine else None
             if r is None:
                 continue
@@ -111,10 +134,16 @@ class _PmuBase:
                     "tve": None, "synced": False, "n": 0}
         n = len(got)
         mean = lambda f: sum(f(r) for r in got) / n
+        # The phasor angle needs a circular mean -- a linear average of e.g.
+        # {+179, -179} is 0 instead of +/-180. Rotating-phasor reports (off-
+        # nominal frequency) routinely cross the wrap, so this matters.
+        phase = math.degrees(math.atan2(
+            sum(math.sin(math.radians(r.phase_deg)) for r in got),
+            sum(math.cos(math.radians(r.phase_deg)) for r in got)))
         return {
             "freq": mean(lambda r: r.freq),
             "vmag": mean(lambda r: r.vmag_phasor),
-            "phase": mean(lambda r: r.phase_deg),
+            "phase": phase,
             "rocof": mean(lambda r: r.rocof),
             "tve": mean(lambda r: r.tve_percent),
             "synced": all(r.synced for r in got),
@@ -127,6 +156,7 @@ class _PmuBase:
         is the time-domain signal to overlay against the scope. ``None`` until
         the stream has produced a block."""
         import numpy as np
+        self._adopt_board_cal()
         rec = self.engine.continuous_samples(seconds) if self.engine else None
         if rec is None:
             return None
@@ -146,6 +176,7 @@ class _PmuBase:
         """
         if settle_s:
             time.sleep(settle_s)
+        self._adopt_board_cal()
         rec = self.engine.continuous_samples(seconds) if self.engine else None
         if rec is None:
             return None
@@ -218,7 +249,10 @@ def make_pmu(simulate: bool, *, port: str | None = None, baud: int = 115200,
     if simulate:
         return SimPmu(bench, volts_per_count=volts_per_count, report_rate=report_rate)
     # On real hardware, if the caller didn't pin a scale, use the persisted
-    # bench calibration (falls through to the firmware default if none exists).
+    # bench calibration. If there is none either, the adapter adopts the
+    # board's flash-provisioned value from STATUS (see _adopt_board_cal);
+    # only an unprovisioned board falls through to the firmware default.
+    # Precedence: explicit > calibration.json > board-reported > default.
     if volts_per_count is None:
         from ..calibration import load_calibration
         volts_per_count = load_calibration()

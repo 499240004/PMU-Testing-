@@ -44,17 +44,50 @@ recovers a real correction rather than trivially returning 1.0.
 
 ## Install
 
+### Fastest path (clean Windows machine): `bootstrap.ps1`
+
+A **fresh Windows install has no real Python and no git** — it only ships 0-byte
+Microsoft Store *app-execution-alias* stubs for `python.exe`/`python3.exe`, which
+make it look like Python is present when it is not (typing `python` just opens
+the Store). This is the #1 deployment gotcha. The bootstrap script handles it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1
+```
+
+It detects/installs Python 3.12 + git via `winget`, initializes the submodules,
+creates `.venv`, installs the package with all extras, and runs a simulate smoke
+test. Safe to re-run.
+
+### Prerequisites (manual install)
+
+- **Python ≥ 3.10** from [python.org](https://www.python.org/downloads/) (tick
+  "Add python.exe to PATH"). The Microsoft Store stub is **not** a real Python —
+  if `python` opens the Store, disable the aliases under *Settings → Apps →
+  Advanced app settings → App execution aliases*.
+- **git** from [git-scm.com](https://git-scm.com/download/win). GitHub Desktop's
+  bundled git is **not** on your terminal PATH, so submodule commands need a
+  standalone git.
+
+### Manual steps
+
 ```powershell
 git clone --recurse-submodules <this repo>
 # if you forgot --recurse-submodules:
 git submodule update --init --recursive
 
-pip install -e .                 # core (numpy)
-pip install -e ".[serial,visa,plot]"   # + real-hardware transports and plots
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+pip install -e ".[serial,visa,plot]"   # transports + plots (see note below)
 ```
 
-The instrument transports are optional extras — install only what you have
-wired: `serial` (3325B, DMM, PMU CDC), `visa` (scope), `plot` (result PNGs).
+**⚠ Simulate mode still needs the `serial` extra.** Although `--simulate` uses no
+hardware, the vendored instrument drivers do a top-level `import serial` / pyvisa
+when their packages are imported, so a core-only `pip install -e .` (numpy only)
+will crash with `ModuleNotFoundError: No module named 'serial'`. Install at least
+`".[serial]"` (or `".[serial,visa,plot]"` for everything) even to run simulate.
+The extras are: `serial` (3325B, DMM, PMU CDC), `visa` (scope), `plot` (PNGs).
 
 ## Desktop GUI
 

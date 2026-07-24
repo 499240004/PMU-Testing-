@@ -178,7 +178,8 @@ class SimScope:
                    f0: float = 60.0) -> float:
         """Simulated fixed ZC-vs-source offset with a little phase noise so the
         stability display has something to show."""
-        return self.bench.scope_phase() if hasattr(self.bench, "scope_phase") else 2.0
+        return (self.bench.scope_phase_deg()
+                if hasattr(self.bench, "scope_phase_deg") else 2.0)
 
     def capture_waveform(self, channel: int | None = None, *, cycles: int = 6,
                          f0: float = 60.0, max_points: int = 20000):
